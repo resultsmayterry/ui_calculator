@@ -1,4 +1,4 @@
-state,absolute_base,hqw,absolute_hqw,wba,num_quarters,outside_high_q,wba_outside_hq,absolute_2nd_high,wba_2hqw,abs_2hqw,hqw_2hqw
+state,absolute_base,hqw,absolute_hqw,wba_thresh,num_quarters,outside_high_q,wba_outside_hq,absolute_2nd_high,wba_2hqw,abs_2hqw,hqw_2hqw
 FL,3400,1.5,0,0,2,0,0,0,0,0,0
 GA,0,1.5,0,0,2,0,0,0,0,0,0
 IL,1600,0,0,0,0,440,0,0,0,0,0

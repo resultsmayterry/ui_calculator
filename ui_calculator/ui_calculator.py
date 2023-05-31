@@ -8,8 +8,9 @@ import pandas as pd
 import numpy as np
 import os
 
-
-CUR_PATH = os.path.split(os.path.abspath(__file__))[0]
+#hope this works...
+CUR_PATH = "/home/y6hwb/util/conda/ui_calculator"
+#CUR_PATH = os.path.split(os.path.abspath(__file__))[0]
 
 def get_file(f):
     # Returns as CSV in the data folder as a pandas DataFrame.
@@ -21,153 +22,118 @@ state_rules = get_file('state_thresholds.csv')
 #This CSV contains the parameters needed to calculate eligibility
 state_eligibility = get_file('state_eligibility.csv')
 
-def calc_weekly_schedule(base_wage, rate, intercept, minimum, maximum):
+def calc_weekly_schedule(df):
     '''Finds weekly benefits from wages in a given period, a rate and intercept,
     a maximum benefit amount an a minimum benefit amount.
     '''
     
-    no_truncation_benefits = (base_wage * rate) + intercept
+    no_truncation_benefits = (df.base_wage * df.rate) + df.intercept
     
-    benefits = max(min(no_truncation_benefits, maximum), minimum)
+    benefits = max(min(no_truncation_benefits, df.maximum), df.minimum)
     
     return benefits
     
 
-def is_eligible(base_period, wba, state):
+def is_eligible(df):
     '''
     Look up by state, and check eligibility from a list of quarterly earnings
     in the base period,and a potential weekly benefit amount if they are found
     to be eligible
     '''
-    try:
-        (absolute_base, hqw, absolute_hqw, wba_thresh, num_quarters, 
-         outside_high_q, wba_outside_hq, absolute_2nd_high, wba_2hqw, 
-         abs_2hqw, hqw_2hqw) = state_eligibility.loc[
-            state_eligibility['state'] == state].iloc[0][1:]
-    except:
-        print("""There was an error indexing the dataframe. 
-              Check that your two character state code is is matched
-              by a state code in state_eligibity.csv""")
-        raise
-
-
     
-    if sum(base_period) < absolute_base:
-        return False
-    if sum(base_period) < hqw*max(base_period):
-        return False
-    if max(base_period) < absolute_hqw:
-        return False
-    if sum(base_period) < wba_thresh*wba:
-        return False
-    if sum([quarter_wages > 0 for quarter_wages in base_period]) < num_quarters:
-        return False
-    if sum(base_period) - max(base_period) < outside_high_q:
-        return False
-    if np.sort(base_period)[-2] < absolute_2nd_high:
-        return False
-    if sum(np.sort(base_period)[-2:]) < wba_2hqw*wba:
-        return False
-    if sum(np.sort(base_period)[-2:]) < hqw_2hqw*max(base_period):
-        return False
-    if sum(np.sort(base_period)[-2:]) < abs_2hqw:
-        return False
+    #merge in eligibility rules
+    df = df.merge(state_eligibility,
+                  how='inner', #shouldn't matter at this point...
+                  on='state'
+    )
+    #apply rules
+    df['eligible'] = True
     
-    return True
- 
-def find_base_wage(wage_concept, base_period, weeks_worked):
+    df.loc[sum(df.base_period.str) < df.absolute_base,'eligible'] = False
+    df.loc[sum(df.base_period.str) < df.hqw*max(df.base_period.str),'eligible'] = False
+    df.loc[max(df.base_period.str) < df.absolute_hqw,'eligible'] = False
+    df.loc[sum(df.base_period.str) < df.wba_thresh * df.wba,'eligible'] = False
+    df.loc[sum([qw > 0 for qw in df.base_period.str]) < df.num_quarters,'eligible'] = False
+    df.loc[sum(df.base_period.str) - max(df.base_period.str) < df.outside_high_q,'eligible'] = False
+    df.loc[np.sort(df.base_period.str)[-2] < df.absolute_2nd_high,'eligible'] = False
+    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.wba_2hqw * df.wba,'eligible'] = False
+    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.hqw_2hqw * max(df.base_period.str),'eligible'] = False
+    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.abs_2hqw,'eligible'] = False
+    
+    return df.eligible
+    
+def find_base_wage(df):
     '''
-    from the name of a wage concept and a list of earnings in the base period,
-    calculate the total earnings that are used to calculate benefits in the
-    state
+    from a dataframe containing:
+        the name of a wage concept
+        list of earnings in the base period
+        weeks_worked
+    calculate the total earnings that are used to calculate benefits in the state and add to dataframe
     '''
     
-    if wage_concept == "2hqw":
-        base_wage = sum((np.sort(base_period))[-2:])
-    elif wage_concept == "hqw":
-        base_wage = max(base_period)
-    elif wage_concept == "annual_wage":
-        base_wage = sum(base_period)
-    elif wage_concept == "2fqw":
-        base_wage = sum(base_period[-2:])
-    elif wage_concept == "ND":
-        base_wage = (sum((np.sort(base_period))[-2:]) +
-                     0.5*np.sort(base_period)[-3])
-    elif wage_concept == "direct_weekly":
-        base_wage = sum(base_period)/weeks_worked
-    else: 
-        print("The wage concept " + str(wage_concept) + 
-              "from state_thresholds.csv is not defined")
-        raise
-        
-            
-    return base_wage
+    df['base_wage']=np.NaN
+    #check these
+    df.loc[df.wage_concept == '2hqw','base_wage'] = sum((np.sort(df.base_period.str))[-2:])
+    df.loc[df.wage_concept == 'hqw','base_wage'] = max(df.base_period.str)
+    df.loc[df.wage_concept == 'annual_wage','base_wage'] = sum(df.base_period.str)
+    df.loc[df.wage_concept == '2fqw','base_wage'] = sum(df.base_period.str[-2:])
+    df.loc[df.wage_concept == 'ND','base_wage'] = (sum((np.sort(df.base_period.str))[-2:]) + 0.5*np.sort(df.base_period.str)[-3])
+    df.loc[df.wage_concept == 'direct_weekly','base_wage'] = sum(df.base_period.str)/df.weeks_worked    
 
-def calc_weekly_state(earnings_hist, state, weeks_worked):
+    return df
+
+def calc_weekly_state(df):
     '''
-    From quarterly earnings history in chronological order, and a two character
-    state index calculate the weekly benefits.
+    From dataframe containing:
+        quarterly earnings history in chronological order, 
+        two character state index
+        weeks worked numeric
+    calculate the weekly benefits.
     '''
 
-    base_period = earnings_hist[-5:-1]
+    # create for compatbility with existing functions
+    df['base_period'] = df.earnings_history.str[-5:-1]
+    # merge in first try rules (highest inc thresh)
+    df = df.merge(state_rules.drop_duplicates(subset='state',keep='first'),
+                  on='state',
+                  how='inner' #drops incorrect or unused state indices
+                  )
+    #add base wage
+    df = find_base_wage(df)
     
+    #update rules when base wage does not meet inc thresh (isolate, drop, modify, append)
+    df_update = df.loc[df.base_wage < df.inc_thresh,['earnings_history','state','weeks_worked','base_period']]
+    df=df.drop(df[df.base_wage < df.inc_thresh])
     
-    try:
-        (wage_concept, rate, intercept,  minimum, maximum,
-         inc_thresh) = state_rules.loc[
-            state_rules['state'] == state].iloc[0][1:7]
-    except:
-        print("""There was an error indexing the dataframe. 
-              Check that your two character state code is is matched by a state
-              code in state_thresholds.csv""")
-        raise
+    df_update=df_update.merge(state_rules.loc[state_rules.duplicated(subset='state',keep='first')],
+                              on='state',
+                              how='inner', #drops incorrect or unused state indices
+                              )       
+    #find the basewage on the alternate concept
+    df_update = find_base_wage(df_update)
+
+    df = pd.concat([df,df_update],axis=0)
+
+    df['wba'] = calc_weekly_schedule(df)
+    # check eligibility, set weekly benefit amount to 0 if ineligible
+    df.eligible = is_eligible(df)
+    df.loc[df.eligible==False,'wba'] = 0
     
+    return df.wba
     
-    base_wage = find_base_wage(wage_concept, base_period, weeks_worked)
-    
-    #check that the income is above the threshold for the given rules:
-    if base_wage < inc_thresh:
-
-        #Redefine the rules variables for the first entry such that the base
-        #wage is above the threshold
-        (wage_concept, rate, intercept,  minimum,
-         maximum) = state_rules.loc[
-            state_rules['state'] == state].loc[
-                base_wage >= state_rules['inc_thresh']].iloc[0][1:6]
-        
-        #find the basewage on the alternate concept
-        base_wage = find_base_wage(wage_concept, base_period, weeks_worked)
-
-
-    wba = calc_weekly_schedule(base_wage, rate, intercept, minimum, maximum)
-
-    if is_eligible(base_period, wba, state):
-        return wba
-    else:
-        return 0
-
 
 def calc_weekly_state_quarterly(q1, q2, q3, q4, states, weeks_worked):
     '''
-    This function is designed to be used with a dataframe. For lists q1,
+    This function is designed take advantage of a dataframe operations. For lists q1,
     q2, q3, q4 which give earnings histories in order for any number of workers and
     a list of states with two character index of their state, it returns a list of 
     their weekly benefit amounts (returning 0 where the worker would be monetarily
     ineligible)
     '''
-    try:
-        nrow = len(q1)
-    except:
-       assert type(states) is str, "Check that you have one state per worker"  
-       return calc_weekly_state([q1, q2, q3, q4, 0], states, weeks_worked)
-    try:
-        assert ((type(states) != str) & (len(states) > 0) &
-                (len(states) == len(q1))), \
-               "Check that you have one state per worker"        
-    except: 
-        raise Exception('Check that you have one state per worker')
 
-    earnings_history = [[q1[i], q2[i], q3[i], q4[i], 0] for i in range(nrow)]
-        
-    return [calc_weekly_state(earnings_history[i], states[i], weeks_worked[i]) 
-            for i in range(nrow)]
+    earnings_history = pd.Series([q1, q2, q3, q4, 0]) #UPDATE
+    df = pd.DataFrame({'earnings_history':earnings_history,
+					   'state':states,
+					   'weeks_worked':weeks_worked})
+    
+    return calc_weekly_state(df)
