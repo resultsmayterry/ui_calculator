@@ -9,7 +9,7 @@ import numpy as np
 import os
 
 #hope this works...
-CUR_PATH = "/home/y6hwb/util/conda/ui_calculator"
+CUR_PATH = "C:/Users/dragm/Documents/GitHub/ui_calculator/ui_calculator"
 #CUR_PATH = os.path.split(os.path.abspath(__file__))[0]
 
 def get_file(f):
@@ -27,11 +27,11 @@ def calc_weekly_schedule(df):
     a maximum benefit amount an a minimum benefit amount.
     '''
     
-    df['no_truncation_benefits'] = (df.base_wage * df.rate) + df.intercept
-    
-    df['benefits'] = df[['no_truncation_benefits', 'maximum']].min()
-    df['benefits'] = df[['no_truncation_benefits', 'minimum']].max()
-    return df.benefits
+    df['wba'] = (df.base_wage * df.rate) + df.intercept
+    df['wba'] = df[['wba', 'maximum']].min(axis=1)
+    df['wba'] = df[['wba', 'minimum']].max(axis=1)
+
+    return df
     
 
 def is_eligible(df):
@@ -100,30 +100,28 @@ def calc_weekly_state(df):
     calculate the weekly benefits.
     '''
 
-    # merge in first try rules (highest inc thresh)
-    df = df.merge(state_rules.drop_duplicates(subset='state',keep='first'),
+    # mark rows for later drop dupe
+    df['id'] = df.index
+    
+    # apply rules: use all, drop base_wage<inc_thresh, drop duplicates (for when all base_wage>=inc_thresh)
+    # merge in ALL rules (highest inc thresh)
+    df = df.merge(state_rules,
                   on='state',
                   how='inner' #drops incorrect or unused state indices
                   )
-    
-    #add base wage
+    # add base wage
     df = find_base_wage(df)
-    #update rules when base wage does not meet inc thresh (isolate, drop, modify, append)
-    df_update = df.loc[df.base_wage < df.inc_thresh,['q1','q2','q3','q4','state','weeks_worked','base_period']]
-    df=df.drop(df[df.base_wage < df.inc_thresh])
-    # modify
-    df_update=df_update.merge(state_rules.loc[state_rules.duplicated(subset='state',keep='first')], #gets rule with inc_thresh==0
-                              on='state',
-                              how='inner', #drops incorrect or unused state indices
-                              )       
-    df_update = find_base_wage(df_update)
-    #append
-    df = pd.concat([df,df_update],axis=0)
+
+    #drop instances where base wage does not meet inc thresh
+    df=df.drop(df[df.base_wage < df.inc_thresh].index,axis=0)
+    #drop dupe keeping high inc_thresh
+    df.drop_duplicates(subset='id',keep='first')
 
     # get raw wba
-    df['wba'] = calc_weekly_schedule(df)
+    df = calc_weekly_schedule(df)
+
     # check eligibility, set weekly benefit amount to 0 if ineligible
-    df.eligible = is_eligible(df)
+    df['eligible'] = is_eligible(df)
     df.loc[df.eligible==False,'wba'] = 0
     
     return df.wba
@@ -143,5 +141,4 @@ def calc_weekly_state_quarterly(q1, q2, q3, q4, states, weeks_worked):
                        'q4':q4,
 					   'state':states,
 					   'weeks_worked':weeks_worked})
-    
     return calc_weekly_state(df)
