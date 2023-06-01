@@ -27,11 +27,11 @@ def calc_weekly_schedule(df):
     a maximum benefit amount an a minimum benefit amount.
     '''
     
-    no_truncation_benefits = (df.base_wage * df.rate) + df.intercept
+    df['no_truncation_benefits'] = (df.base_wage * df.rate) + df.intercept
     
-    benefits = max(min(no_truncation_benefits, df.maximum), df.minimum)
-    
-    return benefits
+    df['benefits'] = df[['no_truncation_benefits', 'maximum']].min()
+    df['benefits'] = df[['no_truncation_benefits', 'minimum']].max()
+    return df.benefits
     
 
 def is_eligible(df):
@@ -46,19 +46,20 @@ def is_eligible(df):
                   how='inner', #shouldn't matter at this point...
                   on='state'
     )
-    #apply rules
+    #apply rules. uses q_concepts
     df['eligible'] = True
     
-    df.loc[sum(df.base_period.str) < df.absolute_base,'eligible'] = False
-    df.loc[sum(df.base_period.str) < df.hqw*max(df.base_period.str),'eligible'] = False
-    df.loc[max(df.base_period.str) < df.absolute_hqw,'eligible'] = False
-    df.loc[sum(df.base_period.str) < df.wba_thresh * df.wba,'eligible'] = False
-    df.loc[sum([qw > 0 for qw in df.base_period.str]) < df.num_quarters,'eligible'] = False
-    df.loc[sum(df.base_period.str) - max(df.base_period.str) < df.outside_high_q,'eligible'] = False
-    df.loc[np.sort(df.base_period.str)[-2] < df.absolute_2nd_high,'eligible'] = False
-    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.wba_2hqw * df.wba,'eligible'] = False
-    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.hqw_2hqw * max(df.base_period.str),'eligible'] = False
-    df.loc[sum(np.sort(df.base_period.str)[-2:]) < df.abs_2hqw,'eligible'] = False
+    df.loc[df.q_annual < df.absolute_base,'eligible'] = False
+    df.loc[df.q_annual < df.hqw*df.q_hqw,'eligible'] = False
+    df.loc[df.q_hqw < df.absolute_hqw,'eligible'] = False
+    df.loc[df.q_annual < df.wba_thresh * df.wba,'eligible'] = False
+    df.loc[((df.q1>0).astype(int)+(df.q2>0).astype(int)+(df.q3>0).astype(int)+(df.q4>0).astype(int)) \
+        < df.num_quarters,'eligible'] = False
+    df.loc[df.q_annual - df.q_hqw < df.outside_high_q,'eligible'] = False
+    df.loc[df.q_2hqw-df.q_hqw < df.absolute_2nd_high,'eligible'] = False
+    df.loc[df.q_2hqw < df.wba_2hqw * df.wba,'eligible'] = False
+    df.loc[df.q_2hqw < df.hqw_2hqw * df.q_hqw,'eligible'] = False
+    df.loc[df.q_2hqw < df.abs_2hqw,'eligible'] = False
     
     return df.eligible
     
@@ -71,56 +72,61 @@ def find_base_wage(df):
     calculate the total earnings that are used to calculate benefits in the state and add to dataframe
     '''
     
-    df['base_wage']=np.NaN
-    #check these
-    df.loc[df.wage_concept == '2hqw','base_wage'] = sum((np.sort(df.base_period.str))[-2:])
-    df.loc[df.wage_concept == 'hqw','base_wage'] = max(df.base_period.str)
-    df.loc[df.wage_concept == 'annual_wage','base_wage'] = sum(df.base_period.str)
-    df.loc[df.wage_concept == '2fqw','base_wage'] = sum(df.base_period.str[-2:])
-    df.loc[df.wage_concept == 'ND','base_wage'] = (sum((np.sort(df.base_period.str))[-2:]) + 0.5*np.sort(df.base_period.str)[-3])
-    df.loc[df.wage_concept == 'direct_weekly','base_wage'] = sum(df.base_period.str)/df.weeks_worked    
+    # add q_concepts. used again in is_eligible()
+    df['q_hqw'] = df[['q1','q2','q3','q4']].max(axis=1)
+    df['q_2hqw'] = df[['q1','q2','q3','q4']].apply(lambda row: row.nlargest(2).values[-1],axis=1) + df.q_hqw
+    df['q_ND'] = df.q_2hqw + 0.5*df[['q1','q2','q3','q4']].apply(lambda row: row.nlargest(3).values[-1],axis=1)
+    df['q_2fqw'] = df.q3+df.q4
+    df['q_annual'] = df.q1+df.q2+df.q3+df.q4
+    df['q_week'] = df.q_annual / df.weeks_worked
+    # init base wage
+    df['base_wage'] = np.NaN
+    # assign correct q_concept to base wage
+    df.loc[df.wage_concept == 'hqw','base_wage'] = df.q_hqw
+    df.loc[df.wage_concept == '2hqw','base_wage'] = df.q_2hqw
+    df.loc[df.wage_concept == 'ND','base_wage'] = df.q_ND
+    df.loc[df.wage_concept == '2fqw','base_wage'] = df.q_2fqw
+    df.loc[df.wage_concept == 'annual_wage','base_wage'] = df.q_annual
+    df.loc[df.wage_concept == 'direct_weekly','base_wage'] = df.q_week
 
     return df
 
 def calc_weekly_state(df):
     '''
     From dataframe containing:
-        quarterly earnings history in chronological order, 
+        quarterly earnings history 
         two character state index
         weeks worked numeric
     calculate the weekly benefits.
     '''
 
-    # create for compatbility with existing functions
-    df['base_period'] = df.earnings_history.str[-5:-1]
     # merge in first try rules (highest inc thresh)
     df = df.merge(state_rules.drop_duplicates(subset='state',keep='first'),
                   on='state',
                   how='inner' #drops incorrect or unused state indices
                   )
+    
     #add base wage
     df = find_base_wage(df)
-    
     #update rules when base wage does not meet inc thresh (isolate, drop, modify, append)
-    df_update = df.loc[df.base_wage < df.inc_thresh,['earnings_history','state','weeks_worked','base_period']]
+    df_update = df.loc[df.base_wage < df.inc_thresh,['q1','q2','q3','q4','state','weeks_worked','base_period']]
     df=df.drop(df[df.base_wage < df.inc_thresh])
-    
-    df_update=df_update.merge(state_rules.loc[state_rules.duplicated(subset='state',keep='first')],
+    # modify
+    df_update=df_update.merge(state_rules.loc[state_rules.duplicated(subset='state',keep='first')], #gets rule with inc_thresh==0
                               on='state',
                               how='inner', #drops incorrect or unused state indices
                               )       
-    #find the basewage on the alternate concept
     df_update = find_base_wage(df_update)
-
+    #append
     df = pd.concat([df,df_update],axis=0)
 
+    # get raw wba
     df['wba'] = calc_weekly_schedule(df)
     # check eligibility, set weekly benefit amount to 0 if ineligible
     df.eligible = is_eligible(df)
     df.loc[df.eligible==False,'wba'] = 0
     
     return df.wba
-    
 
 def calc_weekly_state_quarterly(q1, q2, q3, q4, states, weeks_worked):
     '''
@@ -131,8 +137,10 @@ def calc_weekly_state_quarterly(q1, q2, q3, q4, states, weeks_worked):
     ineligible)
     '''
 
-    earnings_history = pd.Series([q1, q2, q3, q4, 0]) #UPDATE
-    df = pd.DataFrame({'earnings_history':earnings_history,
+    df = pd.DataFrame({'q1':q1,
+                       'q2':q2,
+                       'q3':q3,
+                       'q4':q4,
 					   'state':states,
 					   'weeks_worked':weeks_worked})
     
